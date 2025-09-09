@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ms-leilao
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ms-leilao
+  template:
+    metadata:
+      labels:
+        app: ms-leilao
+    spec:
+      containers:
+        - name: ms-leilao
+          image: ms:latest
+          imagePullPolicy: Never
+          env:
+            - name: RABBITMQ_HOST
+              value: "cluster-leilao"
+            - name: EXCHANGE_NAME
+              value: "leilao.events"
+            - name: START_STAGGER_SEC
+              value: "2"
+            - name: DURATION_SEC
+              value: "30"
+            - name: RABBITMQ_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: cluster-leilao-default-user
+                  key: username
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cluster-leilao-default-user
+                  key: password
+            - name: RABBITMQ_PORT
+              value: "5672"
+            - name: KEYS_DIR
+              value: "/app/src/keys"
+          args: ["python", "src/ms/leilao.py"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ms-lance
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ms-lance
+  template:
+    metadata:
+      labels:
+        app: ms-lance
+    spec:
+      containers:
+        - name: ms-lance
+          image: ms:latest
+          imagePullPolicy: Never
+          env:
+            - name: RABBITMQ_HOST
+              value: "cluster-leilao"
+            - name: EXCHANGE_NAME
+              value: "leilao.events"
+            - name: RABBITMQ_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: cluster-leilao-default-user
+                  key: username
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cluster-leilao-default-user
+                  key: password
+            - name: RABBITMQ_PORT
+              value: "5672"
+            - name: KEYS_DIR
+              value: "/app/src/keys"
+          args: ["python", "src/ms/lance.py"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ms-notificacao
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ms-notificacao
+  template:
+    metadata:
+      labels:
+        app: ms-notificacao
+    spec:
+      containers:
+        - name: ms-notificacao
+          image: ms:latest
+          imagePullPolicy: Never
+          env:
+            - name: RABBITMQ_HOST
+              value: "cluster-leilao"
+            - name: EXCHANGE_NAME
+              value: "leilao.events"
+            - name: RABBITMQ_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: cluster-leilao-default-user
+                  key: username
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cluster-leilao-default-user
+                  key: password
+            - name: RABBITMQ_PORT
+              value: "5672"
+            - name: KEYS_DIR
+              value: "/app/src/keys"
+          args: ["python", "src/ms/notificacao.py"]
