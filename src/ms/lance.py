@@ -26,8 +26,8 @@ from cryptography.hazmat.backends import default_backend
 
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT"))
-RABBITMQ_USERNAME = os.getenv("RABBITMQ_USERNAME", os.getenv("RABBITMQ_USER"))
-RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", os.getenv("RABBITMQ_PASS"))
+RABBITMQ_USERNAME = os.getenv("RABBITMQ_USERNAME")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
 RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "/")
 EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "leilao.events")
 KEYS_DIR = os.getenv("KEYS_DIR")
