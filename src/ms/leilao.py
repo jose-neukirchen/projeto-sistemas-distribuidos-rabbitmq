@@ -13,29 +13,43 @@ lista_leiloes = [
     {
         "id": 1,
         "descricao": "Leilão de Produto A",
-        "data_inicio": "2023-10-01T10:00:00",
-        "data_fim": "2023-10-01T12:00:00",
+        "data_inicio": "2025-10-01T10:00:00",
+        "data_fim": "2025-10-01T12:00:00",
         "status": "ativo"
     },
     {
         "id": 2,
         "descricao": "Leilão de Produto B",
-        "data_inicio": "2023-10-02T14:00:00",
-        "data_fim": "2023-10-02T16:00:00",
+        "data_inicio": "2025-10-02T14:00:00",
+        "data_fim": "2025-10-02T16:00:00",
         "status": "ativo"
     },
     {
         "id": 3,
         "descricao": "Leilão de Produto C",
-        "data_inicio": "2023-10-03T14:00:00",
-        "data_fim": "2023-10-03T16:00:00",
+        "data_inicio": "2025-10-03T14:00:00",
+        "data_fim": "2025-10-03T16:00:00",
         "status": "ativo"
     },
     {
         "id": 4,
         "descricao": "Leilão de Produto D",
-        "data_inicio": "2023-10-04T14:00:00",
-        "data_fim": "2023-10-04T16:00:00",
+        "data_inicio": "2025-10-04T14:00:00",
+        "data_fim": "2025-10-04T16:00:00",
+        "status": "ativo"
+    },
+    {
+        "id": 5,
+        "descricao": "Leilão de Produto E",
+        "data_inicio": "2025-10-05T14:00:00",
+        "data_fim": "2025-10-05T16:00:00",
+        "status": "ativo"
+    },
+    {
+        "id": 6,
+        "descricao": "Leilão de Produto F",
+        "data_inicio": "2025-10-06T14:00:00",
+        "data_fim": "2025-10-06T16:00:00",
         "status": "ativo"
     }
 ]
@@ -53,9 +67,9 @@ RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", os.getenv("RABBITMQ_PASS", "g
 RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "/")
 EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "leilao.events")
 
-START_STAGGER_SEC = int(os.getenv("START_STAGGER_SEC", "2"))   # intervalo entre inícios
-DURATION_SEC = int(os.getenv("DURATION_SEC", "30"))            # duração de cada leilão
-START_DELAY_SEC = int(os.getenv("START_DELAY_SEC", "3"))  # atraso inicial
+START_STAGGER_SEC = "5"   # intervalo entre inícios
+DURATION_SEC = "30"       # duração de cada leilão
+START_DELAY_SEC = "15"  # atraso inicial
 
 MAX_ACTIVE = 2
 MAX_TOTAL = 10
@@ -91,35 +105,47 @@ def main():
         print(f"[MS_Leilao] aguardando {START_DELAY_SEC}s antes de iniciar o primeiro leilão (startup delay)")
         time.sleep(START_DELAY_SEC)
 
-    print(f"[MS_Leilao] Iniciando: até {MAX_TOTAL} leilões, no máximo {MAX_ACTIVE} ativos simultaneamente")
+    # Prepara lista de leilões a partir da lista hardcoded
+    # Ajusta datas para o datetime atual para demonstrar funcionamento
+    now = datetime.now(timezone.utc)
+    leiloes = []
+    for idx, leilao in enumerate(lista_leiloes):
+        aid = int(leilao["id"])
+        desc = leilao["descricao"]
+        start_at = now + timedelta(seconds=idx * START_STAGGER_SEC)
+        end_at = start_at + timedelta(seconds=DURATION_SEC)
+        leiloes.append({
+            "id": aid,
+            "descricao": desc,
+            "start_at": start_at,
+            "end_at": end_at,
+            "status": "ativo"
+        })
 
-    next_id = 1
-    active = {}  # leilao_id -> end_time
-    created_total = 0
+    print("[MS_Leilao] agendados:", [(l["id"], l["start_at"].isoformat(), l["end_at"].isoformat()) for l in leiloes])
 
+    ativos = {}
+    finalizados = set()
+    total = len(leiloes)
     try:
-        while created_total < MAX_TOTAL or active:
+        while len(finalizados) < total:
             now = datetime.now(timezone.utc)
-            # Finaliza leilões que expiraram
-            ended = [aid for aid, end_at in active.items() if now >= end_at]
+            # Inicia leilões cujo horário chegou
+            for l in leiloes:
+                if l["id"] not in ativos and l["id"] not in finalizados and now >= l["start_at"]:
+                    evt_start = {"event": "leilao.iniciado", "id": l["id"], "descricao": l["descricao"], "inicio": l["start_at"].isoformat(), "fim": l["end_at"].isoformat()}
+                    publish(ch, "leilao.iniciado", evt_start)
+                    print(f"[MS_Leilao] iniciado: {evt_start}")
+                    ativos[l["id"]] = l["end_at"]
+            # Finaliza leilões cujo horário de fim chegou
+            ended = [aid for aid, end_at in ativos.items() if now >= end_at]
             for aid in ended:
-                evt_end = {"event": "leilao.finalizado", "id": aid, "fim": active[aid].isoformat()}
+                evt_end = {"event": "leilao.finalizado", "id": aid, "fim": ativos[aid].isoformat()}
                 publish(ch, "leilao.finalizado", evt_end)
                 print(f"[MS_Leilao] finalizado: {evt_end}")
-                del active[aid]
-            # Cria novos se houver espaço e restam a criar
-            while len(active) < MAX_ACTIVE and created_total < MAX_TOTAL:
-                aid = next_id
-                next_id += 1
-                created_total += 1
-                start_at = now
-                end_at = start_at + timedelta(seconds=DURATION_SEC)
-                active[aid] = end_at
-                desc = f"Leilão {aid}"
-                evt_start = {"event": "leilao.iniciado", "id": aid, "descricao": desc, "inicio": start_at.isoformat(), "fim": end_at.isoformat()}
-                publish(ch, "leilao.iniciado", evt_start)
-                print(f"[MS_Leilao] iniciado: {evt_start}")
-            time.sleep(0.5)
+                finalizados.add(aid)
+                del ativos[aid]
+            time.sleep(0.2)
     except KeyboardInterrupt:
         pass
 
