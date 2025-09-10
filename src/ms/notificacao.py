@@ -10,10 +10,10 @@ import os
 import json
 import pika
 
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "cluster-leilao")
-RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", "5672"))
-RABBITMQ_USERNAME = os.getenv("RABBITMQ_USERNAME", os.getenv("RABBITMQ_USER", "guest"))
-RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", os.getenv("RABBITMQ_PASS", "guest"))
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
+RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT"))
+RABBITMQ_USERNAME = os.getenv("RABBITMQ_USERNAME")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
 RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "/")
 EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "leilao.events")
 
