@@ -58,7 +58,7 @@ def publish(ch, routing_key: str, body: dict):
 
 # Desserializa evento, identifica auction_id, garante fila específica e republica para routing key leilao.{id}
 # Faz fan-out especifico por leilão para que os consumidores recebam apenas eventos relevantes
-# params: _ch (canal), method (entrega), _props (propriedades), body (bytes da mensagem).
+# params: _ch (canal), method (entrega), body (bytes da mensagem).
 def on_event(_ch, method, _props, body):
     try:
         msg = json.loads(body.decode())

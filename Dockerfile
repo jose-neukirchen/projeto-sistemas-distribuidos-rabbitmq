@@ -12,8 +12,4 @@ WORKDIR /app
 # libs Python
 RUN pip install --no-cache-dir pika==1.3.2 cryptography==41.0.7
 
-
 COPY src /app/src
-
-# Comando padrão de inicialização
-CMD ["python", "src/clients/client.py"]

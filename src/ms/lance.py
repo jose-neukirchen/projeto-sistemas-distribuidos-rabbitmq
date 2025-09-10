@@ -31,8 +31,9 @@ RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
 RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "/")
 EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "leilao.events")
 KEYS_DIR = os.getenv("KEYS_DIR")
-LEILAO_INICIADO_QUEUE = os.getenv("MS_LANCE_LEILAO_INICIADO_QUEUE", "leilao_iniciado.ms_lance")
-LEILAO_FINALIZADO_QUEUE = os.getenv("MS_LANCE_LEILAO_FINALIZADO_QUEUE", "leilao_finalizado.ms_lance")
+# Filas dedicadas para consumo
+LEILAO_INICIADO_QUEUE = "leilao_iniciado.ms_lance"
+LEILAO_FINALIZADO_QUEUE = "leilao_finalizado.ms_lance"
 
 
 
@@ -127,10 +128,16 @@ def on_lance_realizado(_ch, _method, _props, body):
     aid = int(payload["auction_id"])
     uid = str(payload["user_id"])
     val = float(payload["value"])
-
+    # Verifica assinatura
     if not verify_signature(envelope):
         print(f"[MS_Lance] assinatura inválida para {uid}")
         _ch.basic_ack(_method.delivery_tag)
+        return
+    
+    # Verifica existência (já iniciado) e se está ativo
+    if aid not in active_auctions:
+        print(f"[MS_Lance] rejeitado lance em leilão não ativo: {aid}")
+        _ch.basic_ack(_method.delivery_tag) 
         return
 
     prev = best_bids.get(aid)
@@ -174,11 +181,8 @@ def on_leilao_finalizado(_ch, _method, _props, body):
     except Exception:
         _ch.basic_ack(_method.delivery_tag)
         return
-    was_active = aid in active_auctions
     active_auctions.discard(aid)
     winner = best_bids.get(aid)
-    if not was_active:
-        print(f"[MS_Lance] aviso: finalização recebida para leilão {aid} não marcado ativo (possível perda de leilao.iniciado)")
     if winner:
         uid, val = winner
         out = {"event": "leilao.vencedor", "auction_id": aid, "user_id": uid, "value": val}

@@ -25,8 +25,6 @@ spec:
               value: "client_a"
             - name: BID_INTERVAL
               value: "8"
-            - name: TARGET_AUCTIONS
-              value: "1"
             - name: PRIVATE_KEY_PATH
               value: "/app/src/private-keys/privatea.pem"
             - name: RABBITMQ_USERNAME
@@ -70,8 +68,6 @@ spec:
               value: "client_b"
             - name: BID_INTERVAL
               value: "11"
-            - name: TARGET_AUCTIONS
-              value: "2"
             - name: PRIVATE_KEY_PATH
               value: "/app/src/private-keys/privateb.pem"
             - name: RABBITMQ_USERNAME

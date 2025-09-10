@@ -29,22 +29,20 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.backends import default_backend
 
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "cluster-leilao")
-RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", "5672"))
-RABBITMQ_USERNAME = os.getenv("RABBITMQ_USERNAME", os.getenv("RABBITMQ_USER", "guest"))
-RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", os.getenv("RABBITMQ_PASS", "guest"))
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
+RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT"))
+RABBITMQ_USERNAME = os.getenv("RABBITMQ_USERNAME")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
 RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "/")
 
 EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "leilao.events")
-CLIENT_ID = os.getenv("CLIENT_ID", "client_a")
+CLIENT_ID = os.getenv("CLIENT_ID")
 # Caminho da chave privada (necessário para assinatura)
 PRIVATE_KEY_PATH = os.getenv("PRIVATE_KEY_PATH", "/app/private-keys/private.pem")
 # Fila dedicada para receber broadcast de leilões iniciados (evita competir em uma única fila)
 LEILAO_INICIADO_QUEUE = f"leilao_iniciado.{CLIENT_ID}"
 LEILAO_FINALIZADO_QUEUE = f"leilao_finalizado.{CLIENT_ID}"
-BID_INTERVAL = float(os.getenv("BID_INTERVAL", "10"))
-# acompanhar todos os leilões iniciados
-TARGET_AUCTIONS = [a.strip() for a in os.getenv("TARGET_AUCTIONS", "*").split(",") if a.strip()]
+BID_INTERVAL = float(os.getenv("BID_INTERVAL", "6"))
 
 
 # Estabelece conexão com o RabbitMQ usando parâmetros de ambiente.
