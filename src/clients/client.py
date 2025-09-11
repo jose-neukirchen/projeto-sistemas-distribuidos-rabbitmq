@@ -98,17 +98,21 @@ def consumer_leiloes():
     conn = pika.BlockingConnection(_conn_params())
     ch = conn.channel()
     declare_basics(ch)
-
+    global started_consumers
     def on_started(_ch, _method, _props, body):
         try:
             evt = json.loads(body.decode())
             aid = int(evt.get("id"))
             with ACTIVE_LOCK:
                 if aid in FINISHED_AUCTIONS:
-                    # ignora reuso de id finalizado
                     pass
                 else:
                     ACTIVE_AUCTIONS.add(aid)
+            # Inicia thread de notificações para todo leilão recebido
+            aid_str = str(aid)
+            if aid_str not in started_consumers:
+                Thread(target=consume_notifications, args=(aid_str,), daemon=True).start()
+                started_consumers.add(aid_str)
             print(f"[{CLIENT_ID}] leilao_iniciado: {evt}")
         except Exception:
             print(f"[{CLIENT_ID}] leilao_iniciado: payload inválido")
@@ -191,8 +195,6 @@ def publisher_loop():
     conn = pika.BlockingConnection(_conn_params())
     ch = conn.channel()
     declare_basics(ch)
-    started_consumers = set()
-
     try:
         ch.queue_declare(queue="lance_realizado", durable=True)
         ch.queue_bind(queue="lance_realizado", exchange=EXCHANGE_NAME, routing_key="lance.realizado")
@@ -211,10 +213,6 @@ def publisher_loop():
                     raw = uniform(prev, 1000) if prev < 1000 else prev
                 bid_value = round(raw, 2)
                 LAST_BIDS[aid] = bid_value
-                aid_str = str(aid)
-                if aid_str not in started_consumers:
-                    Thread(target=consume_notifications, args=(aid_str,), daemon=True).start()
-                    started_consumers.add(aid_str)
                 payload = {"event": "lance.realizado", "auction_id": aid, "user_id": CLIENT_ID, "value": bid_value, "ts": now}
                 signature = sign_payload(priv, payload)
                 envelope = {"payload": payload, "signature": signature, "algo": "RSA-PKCS1v15-SHA256", "key_id": CLIENT_ID}

@@ -83,3 +83,48 @@ spec:
             - name: RABBITMQ_PORT
               value: "5672"
           args: ["python", "src/clients/client.py"]
+---
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: client-c
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: client-c
+  template:
+    metadata:
+      labels:
+        app: client-c
+    spec:
+      containers:
+        - name: client-c
+          image: client:latest
+          imagePullPolicy: Never
+          env:
+            - name: RABBITMQ_HOST
+              value: "cluster-leilao"
+            - name: EXCHANGE_NAME
+              value: "leilao.events"
+            - name: CLIENT_ID
+              value: "client_c"
+            - name: BID_INTERVAL
+              value: "11"
+            - name: PRIVATE_KEY_PATH
+              value: "/app/src/private-keys/privateb.pem"
+            - name: RABBITMQ_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: cluster-leilao-default-user
+                  key: username
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cluster-leilao-default-user
+                  key: password
+            - name: RABBITMQ_PORT
+              value: "5672"
+          args: ["python", "src/clients/client.py"]
+

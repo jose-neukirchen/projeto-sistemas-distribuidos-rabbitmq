@@ -74,6 +74,8 @@ START_DELAY_SEC = 15  # atraso inicial
 MAX_ACTIVE = 2
 MAX_TOTAL = 10
 
+# Publica em leilao.iniciado e leilao.finalizado
+
 # Conexão com o rabbimq
 # return: objeto pika.ConnectionParameters.
 def conn_params():

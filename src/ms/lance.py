@@ -35,7 +35,8 @@ KEYS_DIR = os.getenv("KEYS_DIR")
 LEILAO_INICIADO_QUEUE = "leilao_iniciado.ms_lance"
 LEILAO_FINALIZADO_QUEUE = "leilao_finalizado.ms_lance"
 
-
+# Consome lance_realizado lance_iniciado lance_finalizado
+# Publica lance_validado e leilao_vencedor
 
 # connect com o rabbimq
 # return: objeto pika.ConnectionParameters.
