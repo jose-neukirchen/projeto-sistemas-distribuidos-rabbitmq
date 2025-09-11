@@ -67,9 +67,9 @@ RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
 RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "/")
 EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "leilao.events")
 
-START_STAGGER_SEC = "5"   # intervalo entre inícios
-DURATION_SEC = "30"       # duração de cada leilão
-START_DELAY_SEC = "15"  # atraso inicial
+START_STAGGER_SEC = 5   # intervalo entre inícios
+DURATION_SEC = 30       # duração de cada leilão
+START_DELAY_SEC = 15  # atraso inicial
 
 MAX_ACTIVE = 2
 MAX_TOTAL = 10
