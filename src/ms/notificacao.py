@@ -17,6 +17,8 @@ RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
 RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "/")
 EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "leilao.events")
 
+# Consome lance_realizado e lance_vencedor
+
 # Conexão com o rabbimq
 # return: objeto pika.ConnectionParameters.
 def conn_params():
