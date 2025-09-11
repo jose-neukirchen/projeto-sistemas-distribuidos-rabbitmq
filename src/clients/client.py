@@ -44,33 +44,6 @@ LEILAO_INICIADO_QUEUE = f"leilao_iniciado.{CLIENT_ID}"
 LEILAO_FINALIZADO_QUEUE = f"leilao_finalizado.{CLIENT_ID}"
 BID_INTERVAL = float(os.getenv("BID_INTERVAL", "6"))
 
-
-# Estabelece conexão com o RabbitMQ usando parâmetros de ambiente.
-# params: max_retries (int) número máximo de tentativas; delay (int) segundos entre tentativas.
-# return: instancia pika.BlockingConnection ativa.
-def connect(max_retries=10, delay=3):
-    credentials = pika.PlainCredentials(RABBITMQ_USERNAME, RABBITMQ_PASSWORD)
-    params = pika.ConnectionParameters(
-        host=RABBITMQ_HOST,
-        port=RABBITMQ_PORT,
-        virtual_host=RABBITMQ_VHOST,
-        credentials=credentials,
-        heartbeat=30,
-        blocked_connection_timeout=60,
-    )
-    attempt = 1
-    while True:
-        try:
-            return pika.BlockingConnection(params)
-        except Exception as e:
-            if attempt >= max_retries:
-                raise
-            print(f"Connection attempt {attempt} failed: {e}. Retrying in {delay}s...")
-            time.sleep(delay)
-            attempt += 1
-
-
-
 # Cria parâmetros de conexão para o RabbitMQ, usados em todas as conexões do client.
 # Centraliza a configuração de conexão, facilitando manutenção e reutilização.
 # return: objeto pika.ConnectionParameters.
