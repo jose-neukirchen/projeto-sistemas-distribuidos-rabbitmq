@@ -98,7 +98,7 @@ def consumer_leiloes():
     conn = pika.BlockingConnection(_conn_params())
     ch = conn.channel()
     declare_basics(ch)
-    global started_consumers
+
     def on_started(_ch, _method, _props, body):
         try:
             evt = json.loads(body.decode())
@@ -108,11 +108,6 @@ def consumer_leiloes():
                     pass
                 else:
                     ACTIVE_AUCTIONS.add(aid)
-            # Inicia thread de notificações para todo leilão recebido
-            aid_str = str(aid)
-            if aid_str not in started_consumers:
-                Thread(target=consume_notifications, args=(aid_str,), daemon=True).start()
-                started_consumers.add(aid_str)
             print(f"[{CLIENT_ID}] leilao_iniciado: {evt}")
         except Exception:
             print(f"[{CLIENT_ID}] leilao_iniciado: payload inválido")
@@ -142,7 +137,8 @@ def consumer_leiloes():
 # params: ch (canal pika), auction_id (str id do leilão).
 # return: nome da fila, routing key.
 def ensure_leilao_queue(ch, auction_id: str):
-    qname = f"leilao_{auction_id}"
+    # Fila exclusiva por cliente para evitar competição e garantir broadcast
+    qname = f"leilao_{auction_id}.{CLIENT_ID}"
     rkey = f"leilao.{auction_id}"
     ch.queue_declare(queue=qname, durable=True)
     ch.queue_bind(queue=qname, exchange=EXCHANGE_NAME, routing_key=rkey)
@@ -163,7 +159,7 @@ def consume_notifications(auction_id: str):
             msg = json.loads(body.decode())
         except Exception:
             msg = {"raw": body.decode(errors="ignore")}
-        print(f"[{CLIENT_ID}] notif leilao_{auction_id}: {msg}")
+        print(f"[{CLIENT_ID}] notif {qname}: {msg}")
         # Mensagem de resultado
         if isinstance(msg, dict) and msg.get("event") == "leilao.vencedor" and str(msg.get("auction_id")) == auction_id:
             winner = msg.get("user_id")
@@ -174,7 +170,7 @@ def consume_notifications(auction_id: str):
                 print(f"Infelizmente você não venceu o leilao {auction_id}, o lance vencedor foi o de valor {value}.")
 
     ch.basic_consume(queue=qname, on_message_callback=lambda *args: (on_notify(*args), None), auto_ack=True)
-    print(f"[{CLIENT_ID}] Esperando atualizações para leilao_{auction_id}")
+    print(f"[{CLIENT_ID}] Esperando atualizações para {qname}")
     try:
         ch.start_consuming()
     finally:
@@ -195,6 +191,8 @@ def publisher_loop():
     conn = pika.BlockingConnection(_conn_params())
     ch = conn.channel()
     declare_basics(ch)
+    started_consumers = set()
+
     try:
         ch.queue_declare(queue="lance_realizado", durable=True)
         ch.queue_bind(queue="lance_realizado", exchange=EXCHANGE_NAME, routing_key="lance.realizado")
@@ -213,6 +211,10 @@ def publisher_loop():
                     raw = uniform(prev, 1000) if prev < 1000 else prev
                 bid_value = round(raw, 2)
                 LAST_BIDS[aid] = bid_value
+                aid_str = str(aid)
+                if aid_str not in started_consumers:
+                    Thread(target=consume_notifications, args=(aid_str,), daemon=True).start()
+                    started_consumers.add(aid_str)
                 payload = {"event": "lance.realizado", "auction_id": aid, "user_id": CLIENT_ID, "value": bid_value, "ts": now}
                 signature = sign_payload(priv, payload)
                 envelope = {"payload": payload, "signature": signature, "algo": "RSA-PKCS1v15-SHA256", "key_id": CLIENT_ID}

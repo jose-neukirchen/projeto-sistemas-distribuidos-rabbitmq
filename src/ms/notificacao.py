@@ -37,17 +37,6 @@ def declare_basics(ch):
         ch.queue_declare(queue=q, durable=True)
         ch.queue_bind(queue=q, exchange=EXCHANGE_NAME, routing_key=rk)
 
-# Cria dinamicamente fila/leilao_{id} e binding para routing key leilao.{id}.
-# Isola notificações por leilão assim apenas interessados consomem.
-# params: ch (canal), auction_id (int ID do leilão).
-# return: qname, routing_key.
-def ensure_leilao_queue(ch, auction_id: int):
-    qname = f"leilao_{auction_id}"
-    rkey = f"leilao.{auction_id}"
-    ch.queue_declare(queue=qname, durable=True)
-    ch.queue_bind(queue=qname, exchange=EXCHANGE_NAME, routing_key=rkey)
-    return qname, rkey
-
 # Realiza o publish: Envia mensagem p/ exchange com a rk correta
 # params: ch (canal), routing_key (str), body (dict mensagem de evento).
 def publish(ch, routing_key: str, body: dict):
@@ -69,9 +58,9 @@ def on_event(_ch, method, _props, body):
         print("[MS_Notificacao] mensagem inválida")
         _ch.basic_ack(method.delivery_tag)
         return
-    qname, rkey = ensure_leilao_queue(_ch, aid)
+    rkey = f"leilao.{aid}"
     publish(_ch, rkey, msg)
-    print(f"[MS_Notificacao] -> {qname}: {msg}")
+    print(f"[MS_Notificacao] broadcast rk={rkey}: {msg}")
     _ch.basic_ack(method.delivery_tag)
 
 def main():
