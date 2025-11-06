@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-client
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend-client
+  template:
+    metadata:
+      labels:
+        app: frontend-client
+    spec:
+      containers:
+        - name: frontend-client
+          image: frontend:latest
+          imagePullPolicy: Never
+          env:
+            - name: API_GATEWAY_URL
+              value: "http://api-gateway:8000"
+            - name: CLIENT_ID
+              value: "client_frontend"
+          stdin: true
+          tty: true

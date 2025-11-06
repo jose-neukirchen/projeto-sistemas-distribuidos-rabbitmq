@@ -1,28 +1,19 @@
 # MS Lance (publisher e subscriber)
-# 1. Possui as chaves públicas de todos os clientes.
-# 2. Escuta os eventos das filas lance_realizado, leilao_iniciado
-# e leilao_finalizado.
-# 3. Recebe lances de usuários (ID do leilão; ID do usuário, valor
-# do lance) e checa a assinatura digital da mensagem utilizando a
-# chave pública correspondente. Somente aceitará o lance se:
-# 	3.1. A assinatura for válida;
-# 	3.2. ID do leilão existir e se o leilão estiver ativo;
-# 	3.3. Se o lance for maior que o último lance registrado;
-# 4. Se o lance for válido, o MS Lance publica o evento na fila
-# lance_validado.
-# 5. Ao finalizar um leilão, deve publicar na fila leilao_vencedor,
-# informando o ID do leilão, o ID do vencedor do leilão e o valor
-# negociado. O vencedor é o que efetuou o maior lance válido até o
-# encerramento.
+# 1. Consome os eventos leilao_iniciado e leilao_finalizado.
+# 2. Recebe requisições REST do gateway contendo um lance (ID do leilão; ID do usuário, valor do lance).
+#    Somente aceita o lance se o leilão estiver ativo e se o lance for maior que o último lance registrado:
+#    - Se o lance for válido, o MS Lance publica lance_validado.
+#    - Caso contrário, ele publica o evento lance_invalidado.
+# 3. Quando o evento leilao_finalizado é recebido, o MS Lance determina o vencedor e publica leilao_vencedor,
+#    informando o ID do leilão, o ID do vencedor do leilão e o valor negociado.
 
 import os
 import json
-import base64
+import time
 import pika
+import threading
 from typing import Dict, Tuple, Set
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.backends import default_backend
+from flask import Flask, request, jsonify
 
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT"))
@@ -30,84 +21,63 @@ RABBITMQ_USERNAME = os.getenv("RABBITMQ_USERNAME")
 RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
 RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "/")
 EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "leilao.events")
-KEYS_DIR = os.getenv("KEYS_DIR")
+LANCE_PORT = int(os.getenv("LANCE_PORT", "5001"))
+
 # Filas dedicadas para consumo
 LEILAO_INICIADO_QUEUE = "leilao_iniciado.ms_lance"
 LEILAO_FINALIZADO_QUEUE = "leilao_finalizado.ms_lance"
 
-# Consome lance_realizado lance_iniciado lance_finalizado
-# Publica lance_validado e leilao_vencedor
+# Consome leilao_iniciado e leilao_finalizado
+# Publica lance_validado, lance_invalidado e leilao_vencedor
 
-# connect com o rabbimq
-# return: objeto pika.ConnectionParameters.
+active_auctions: Set[int] = set()
+best_bids: Dict[int, Tuple[str, float]] = {}  # auction_id -> (user_id, value)
+auctions_lock = threading.Lock()
+
+app = Flask(__name__)
+
+# Conexão RabbitMQ global para publicação
+_pub_conn = None
+_pub_ch = None
+
+
 def conn_params():
+    """Cria parâmetros de conexão RabbitMQ"""
     creds = pika.PlainCredentials(RABBITMQ_USERNAME, RABBITMQ_PASSWORD)
-    return pika.ConnectionParameters(host=RABBITMQ_HOST, port=RABBITMQ_PORT, virtual_host=RABBITMQ_VHOST, credentials=creds, heartbeat=30)
+    return pika.ConnectionParameters(
+        host=RABBITMQ_HOST,
+        port=RABBITMQ_PORT,
+        virtual_host=RABBITMQ_VHOST,
+        credentials=creds,
+        heartbeat=30
+    )
 
-# Declara exchange direct e todas as filas+bindings tanto para consumo quanto para publicação.
-# Garantir infraestrutura de filas antes de processar mensagens.
-# param: ch (canal pika.BlockingChannel).
+
 def declare_basics(ch):
+    """Declara exchange e filas"""
     ch.exchange_declare(exchange=EXCHANGE_NAME, exchange_type="direct", durable=True)
-    # filas consumidas (dedicadas para broadcast de início/fim)
+    
+    # Filas consumidas
     for q, rk in [
-        ("lance_realizado", "lance.realizado"),
         (LEILAO_INICIADO_QUEUE, "leilao.iniciado"),
         (LEILAO_FINALIZADO_QUEUE, "leilao.finalizado"),
     ]:
         ch.queue_declare(queue=q, durable=True)
         ch.queue_bind(queue=q, exchange=EXCHANGE_NAME, routing_key=rk)
-    # filas publicadas (únicas)
+    
+    # Filas publicadas
     for q, rk in [
         ("lance_validado", "lance.validado"),
+        ("lance_invalidado", "lance.invalidado"),
         ("leilao_vencedor", "leilao.vencedor"),
     ]:
         ch.queue_declare(queue=q, durable=True)
         ch.queue_bind(queue=q, exchange=EXCHANGE_NAME, routing_key=rk)
 
-_pub_conn = pika.BlockingConnection(conn_params())
-_pub_ch = _pub_conn.channel()
-declare_basics(_pub_ch)
 
-active_auctions: Set[int] = set()
-best_bids: Dict[int, Tuple[str, float]] = {}  # auction_id -> (user_id, value)
-pubkey_cache: Dict[str, object] = {}
-
-# Carrega e faz cache da chave pública correspondente ao client_id para validação futura.
-# Disponibiliza a chave pública para cada lance.
-# param: client_id (str identificador do cliente).
-# return: objeto de chave pública (RSA public key).
-def load_pubkey(client_id: str):
-    if client_id in pubkey_cache:
-        return pubkey_cache[client_id]
-    path = os.path.join(KEYS_DIR, f"{client_id}_public.pem")
-    with open(path, "rb") as f:
-        key = serialization.load_pem_public_key(f.read(), backend=default_backend())
-        pubkey_cache[client_id] = key
-        return key
-
-# Decodifica assinatura e usa a chave pública para verificar
-# Garantir autenticidade e integridade do lance
-# param: envelope (dict contendo payload e assinatura Base64).
-# return: bool (True se assinatura válida, False caso contrário).
-def verify_signature(envelope: dict) -> bool:
-    try:
-        payload = envelope["payload"]
-        signature_b64 = envelope["signature"]
-        client_id = envelope.get("key_id") or payload["user_id"]
-        pubkey = load_pubkey(client_id)
-        msg = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        signature = base64.b64decode(signature_b64)
-        pubkey.verify(signature, msg, padding.PKCS1v15(), hashes.SHA256())
-        return True
-    except Exception as e:
-        print(f"[MS_Lance] assinatura inválida: {e}")
-        return False
-
-# Envia eventos para a exchange com a devida rk.
-# param: routing_key (str), body (dict do evento a publicar).
-# return: None.
 def publish(routing_key: str, body: dict):
+    """Envia eventos para a exchange"""
+    global _pub_ch
     _pub_ch.basic_publish(
         exchange=EXCHANGE_NAME,
         routing_key=routing_key,
@@ -115,103 +85,161 @@ def publish(routing_key: str, body: dict):
         properties=pika.BasicProperties(delivery_mode=2),
     )
 
-# Desserializa, verifica leilão ativo, assinatura e valor maior. publica evento de validação
-# param: _ch (canal), _method (entrega AMQP), _props (propriedades), body (bytes mensagem).
-def on_lance_realizado(_ch, _method, _props, body):
-    try:
-        envelope = json.loads(body.decode())
-        payload = envelope["payload"]
-    except Exception:
-        print("[MS_Lance] payload inválido")
-        _ch.basic_ack(_method.delivery_tag)
-        return
 
-    aid = int(payload["auction_id"])
-    uid = str(payload["user_id"])
-    val = float(payload["value"])
-    # Verifica assinatura
-    if not verify_signature(envelope):
-        print(f"[MS_Lance] assinatura inválida para {uid}")
-        _ch.basic_ack(_method.delivery_tag)
-        return
+def on_leilao_iniciado(_ch, method, _props, body):
+    """Callback para eventos de leilão iniciado"""
+    try:
+        msg = json.loads(body.decode())
+        aid = int(msg.get("id"))
+        
+        with auctions_lock:
+            active_auctions.add(aid)
+            if aid not in best_bids:
+                best_bids[aid] = (None, 0.0)
+        
+        print(f"[MS_Lance] Leilão {aid} iniciado e marcado como ativo")
+        
+    except Exception as e:
+        print(f"[MS_Lance] Erro ao processar leilao_iniciado: {e}")
     
-    # Verifica existência (já iniciado) e se está ativo
-    if aid not in active_auctions:
-        print(f"[MS_Lance] rejeitado lance em leilão não ativo: {aid}")
-        _ch.basic_ack(_method.delivery_tag) 
-        return
-
-    prev = best_bids.get(aid)
-    if prev is None or val > prev[1]:
-        best_bids[aid] = (uid, val)
-        evt = {
-            "event": "lance.validado",
-            "auction_id": aid,
-            "user_id": uid,
-            "value": val,
-            "ts": payload.get("ts"),
-        }
-        publish("lance.validado", evt)
-        print(f"[MS_Lance] lance válido {evt}")
-    else:
-        print(f"[MS_Lance] lance {val} <= atual {prev[1]}")
-
-    _ch.basic_ack(_method.delivery_tag)
+    _ch.basic_ack(method.delivery_tag)
 
 
-# Marca leilão como ativo e reseta melhor lance.
-# param: _ch (canal), _method, _props, body (bytes evento).
-def on_leilao_iniciado(_ch, _method, _props, body):
+def on_leilao_finalizado(_ch, method, _props, body):
+    """Callback para eventos de leilão finalizado"""
     try:
-        evt = json.loads(body.decode())
-        aid = int(evt["id"])
-    except Exception:
-        _ch.basic_ack(_method.delivery_tag)
-        return
-    active_auctions.add(aid)
-    best_bids.pop(aid, None)
-    print(f"[MS_Lance] leilão iniciado {aid}")
-    _ch.basic_ack(_method.delivery_tag)
+        msg = json.loads(body.decode())
+        aid = int(msg.get("id"))
+        
+        with auctions_lock:
+            if aid in active_auctions:
+                active_auctions.remove(aid)
+            
+            # Publica vencedor se houver lances
+            if aid in best_bids and best_bids[aid][0] is not None:
+                winner_id, winner_value = best_bids[aid]
+                event = {
+                    "event": "leilao.vencedor",
+                    "auction_id": aid,
+                    "winner_id": winner_id,
+                    "value": winner_value
+                }
+                publish("leilao.vencedor", event)
+                print(f"[MS_Lance] Vencedor do leilão {aid}: {winner_id} com valor {winner_value}")
+            else:
+                print(f"[MS_Lance] Leilão {aid} finalizado sem lances")
+        
+    except Exception as e:
+        print(f"[MS_Lance] Erro ao processar leilao_finalizado: {e}")
+    
+    _ch.basic_ack(method.delivery_tag)
 
-# Remove leilão de ativos e publica vencedor se houver lance registrado.
-# param: _ch (canal), _method, _props, body (bytes evento).
-def on_leilao_finalizado(_ch, _method, _props, body):
-    try:
-        evt = json.loads(body.decode())
-        aid = int(evt["id"])
-    except Exception:
-        _ch.basic_ack(_method.delivery_tag)
-        return
-    active_auctions.discard(aid)
-    winner = best_bids.get(aid)
-    if winner:
-        uid, val = winner
-        out = {"event": "leilao.vencedor", "auction_id": aid, "user_id": uid, "value": val}
-        publish("leilao.vencedor", out)
-        print(f"[MS_Lance] vencedor {out}")
-    else:
-        print(f"[MS_Lance] sem lances válidos no leilão {aid}")
-    _ch.basic_ack(_method.delivery_tag)
 
-def main():
+def consume_events():
+    """Thread para consumir eventos do RabbitMQ"""
     conn = pika.BlockingConnection(conn_params())
     ch = conn.channel()
     declare_basics(ch)
-
+    
     ch.basic_qos(prefetch_count=10)
-    ch.basic_consume(queue="lance_realizado", on_message_callback=on_lance_realizado, auto_ack=False)
     ch.basic_consume(queue=LEILAO_INICIADO_QUEUE, on_message_callback=on_leilao_iniciado, auto_ack=False)
     ch.basic_consume(queue=LEILAO_FINALIZADO_QUEUE, on_message_callback=on_leilao_finalizado, auto_ack=False)
-
-    print(f"[MS_Lance] consumindo filas: lance_realizado, {LEILAO_INICIADO_QUEUE}, {LEILAO_FINALIZADO_QUEUE}")
+    
+    print("[MS_Lance] Consumindo eventos do RabbitMQ")
     try:
         ch.start_consuming()
     finally:
-        try:
-            _pub_conn.close()
-        except Exception:
-            pass
         conn.close()
+
+
+# REST API Endpoints
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Endpoint de health check"""
+    return jsonify({"status": "healthy"}), 200
+
+
+@app.route('/lances', methods=['POST'])
+def efetuar_lance():
+    """Recebe um lance via REST"""
+    try:
+        data = request.json
+        auction_id = int(data.get("auction_id"))
+        user_id = str(data.get("user_id"))
+        value = float(data.get("value"))
+        
+        if not auction_id or not user_id or not value:
+            return jsonify({"error": "Campos obrigatórios: auction_id, user_id, value"}), 400
+        
+        with auctions_lock:
+            # Verifica se o leilão está ativo
+            if auction_id not in active_auctions:
+                event = {
+                    "event": "lance.invalidado",
+                    "auction_id": auction_id,
+                    "user_id": user_id,
+                    "value": value,
+                    "reason": "Leilão não está ativo"
+                }
+                publish("lance.invalidado", event)
+                print(f"[MS_Lance] Lance rejeitado: leilão {auction_id} não está ativo")
+                return jsonify({"error": "Leilão não está ativo"}), 400
+            
+            # Verifica se o lance é maior que o último
+            prev_user, prev_value = best_bids.get(auction_id, (None, 0.0))
+            
+            if value <= prev_value:
+                event = {
+                    "event": "lance.invalidado",
+                    "auction_id": auction_id,
+                    "user_id": user_id,
+                    "value": value,
+                    "reason": f"Lance deve ser maior que {prev_value}"
+                }
+                publish("lance.invalidado", event)
+                print(f"[MS_Lance] Lance rejeitado: valor {value} não é maior que {prev_value}")
+                return jsonify({"error": f"Lance deve ser maior que {prev_value}"}), 400
+            
+            # Lance válido - atualiza e publica
+            best_bids[auction_id] = (user_id, value)
+            event = {
+                "event": "lance.validado",
+                "auction_id": auction_id,
+                "user_id": user_id,
+                "value": value,
+                "previous_value": prev_value
+            }
+            publish("lance.validado", event)
+            print(f"[MS_Lance] Lance válido: leilão {auction_id}, usuário {user_id}, valor {value}")
+            
+            return jsonify({
+                "message": "Lance aceito",
+                "auction_id": auction_id,
+                "user_id": user_id,
+                "value": value
+            }), 200
+        
+    except Exception as e:
+        print(f"[MS_Lance] Erro ao processar lance: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+def main():
+    global _pub_conn, _pub_ch
+    
+    # Inicializa conexão para publicação
+    _pub_conn = pika.BlockingConnection(conn_params())
+    _pub_ch = _pub_conn.channel()
+    declare_basics(_pub_ch)
+    
+    # Inicia thread para consumir eventos
+    consumer_thread = threading.Thread(target=consume_events, daemon=True)
+    consumer_thread.start()
+    
+    print(f"[MS_Lance] Iniciando servidor REST na porta {LANCE_PORT}")
+    app.run(host='0.0.0.0', port=LANCE_PORT, threaded=True)
+
 
 if __name__ == "__main__":
     main()

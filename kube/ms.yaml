@@ -22,9 +22,13 @@ spec:
             - name: EXCHANGE_NAME
               value: "leilao.events"
             - name: START_STAGGER_SEC
-              value: "2"
+              value: "20"
             - name: DURATION_SEC
               value: "30"
+            - name: START_DELAY_SEC
+              value: "15"
+            - name: LEILAO_PORT
+              value: "5000"
             - name: RABBITMQ_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -37,9 +41,20 @@ spec:
                   key: password
             - name: RABBITMQ_PORT
               value: "5672"
-            - name: KEYS_DIR
-              value: "/app/src/keys"
           args: ["python", "src/ms/leilao.py"]
+          ports:
+            - containerPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ms-leilao
+spec:
+  selector:
+    app: ms-leilao
+  ports:
+    - port: 5000
+      targetPort: 5000
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -64,6 +79,8 @@ spec:
               value: "cluster-leilao"
             - name: EXCHANGE_NAME
               value: "leilao.events"
+            - name: LANCE_PORT
+              value: "5001"
             - name: RABBITMQ_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -76,26 +93,37 @@ spec:
                   key: password
             - name: RABBITMQ_PORT
               value: "5672"
-            - name: KEYS_DIR
-              value: "/app/src/keys"
           args: ["python", "src/ms/lance.py"]
+          ports:
+            - containerPort: 5001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ms-lance
+spec:
+  selector:
+    app: ms-lance
+  ports:
+    - port: 5000
+      targetPort: 5001
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ms-notificacao
+  name: ms-pagamento
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ms-notificacao
+      app: ms-pagamento
   template:
     metadata:
       labels:
-        app: ms-notificacao
+        app: ms-pagamento
     spec:
       containers:
-        - name: ms-notificacao
+        - name: ms-pagamento
           image: ms:latest
           imagePullPolicy: Never
           env:
@@ -103,6 +131,10 @@ spec:
               value: "cluster-leilao"
             - name: EXCHANGE_NAME
               value: "leilao.events"
+            - name: PAGAMENTO_PORT
+              value: "5002"
+            - name: EXTERNAL_PAYMENT_URL
+              value: "http://payment-external:8080"
             - name: RABBITMQ_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -115,6 +147,115 @@ spec:
                   key: password
             - name: RABBITMQ_PORT
               value: "5672"
-            - name: KEYS_DIR
-              value: "/app/src/keys"
-          args: ["python", "src/ms/notificacao.py"]
+          args: ["python", "src/ms/pagamento.py"]
+          ports:
+            - containerPort: 5002
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ms-pagamento
+spec:
+  selector:
+    app: ms-pagamento
+  ports:
+    - port: 5002
+      targetPort: 5002
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+        - name: api-gateway
+          image: ms:latest
+          imagePullPolicy: Never
+          env:
+            - name: RABBITMQ_HOST
+              value: "cluster-leilao"
+            - name: EXCHANGE_NAME
+              value: "leilao.events"
+            - name: GATEWAY_PORT
+              value: "8000"
+            - name: MS_LEILAO_URL
+              value: "http://ms-leilao:5000"
+            - name: MS_LANCE_URL
+              value: "http://ms-lance:5000"
+            - name: RABBITMQ_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: cluster-leilao-default-user
+                  key: username
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cluster-leilao-default-user
+                  key: password
+            - name: RABBITMQ_PORT
+              value: "5672"
+          args: ["python", "src/ms/api_gateway.py"]
+          ports:
+            - containerPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+spec:
+  type: NodePort
+  selector:
+    app: api-gateway
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-external
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-external
+  template:
+    metadata:
+      labels:
+        app: payment-external
+    spec:
+      containers:
+        - name: payment-external
+          image: ms:latest
+          imagePullPolicy: Never
+          env:
+            - name: PAYMENT_PORT
+              value: "8080"
+            - name: PAYMENT_PROCESS_DELAY
+              value: "10"
+            - name: APPROVAL_RATE
+              value: "0.8"
+          args: ["python", "src/external/payment_system.py"]
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-external
+spec:
+  selector:
+    app: payment-external
+  ports:
+    - port: 8080
+      targetPort: 8080

@@ -9,7 +9,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# libs Python
-RUN pip install --no-cache-dir pika==1.3.2 cryptography==41.0.7
+# libs Python - adicionadas Flask, Flask-CORS e requests
+RUN pip install --no-cache-dir \
+    pika==1.3.2 \
+    flask==3.0.0 \
+    flask-cors==4.0.0 \
+    requests==2.31.0
 
 COPY src /app/src
