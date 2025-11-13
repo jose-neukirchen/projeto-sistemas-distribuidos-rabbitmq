@@ -73,7 +73,7 @@ EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "leilao.events")
 LEILAO_PORT = int(os.getenv("LEILAO_PORT", "5000"))
 
 START_STAGGER_SEC = 20   # intervalo entre inícios
-DURATION_SEC = 30       # duração de cada leilão
+DURATION_SEC = 120       # duração de cada leilão
 START_DELAY_SEC = 15  # atraso inicial
 
 MAX_ACTIVE = 2
@@ -85,6 +85,7 @@ MAX_TOTAL = 10
 leiloes_db = []  # Lista de todos os leilões
 leiloes_ativos = {}  # auction_id -> end_time
 leiloes_finalizados = set()
+best_bids = {}  # auction_id -> (user_id, value)
 leiloes_lock = threading.Lock()
 next_auction_id = 1
 
@@ -179,6 +180,26 @@ def criar_leilao():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/leiloes/<int:auction_id>/lance', methods=['POST'])
+def atualizar_lance(auction_id):
+    """Atualizar o melhor lance de um leilão (chamado pelo MS Lance)"""
+    try:
+        data = request.json
+        user_id = data.get("user_id")
+        value = float(data.get("value"))
+        
+        with leiloes_lock:
+            if auction_id not in leiloes_ativos:
+                return jsonify({"error": "Leilão não está ativo"}), 404
+            
+            best_bids[auction_id] = (user_id, value)
+        
+        return jsonify({"message": "Lance atualizado"}), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/leiloes', methods=['GET'])
 def consultar_leiloes():
     """Consultar leilões ativos"""
@@ -187,13 +208,17 @@ def consultar_leiloes():
             ativos = []
             for leilao in leiloes_db:
                 if leilao["id"] in leiloes_ativos:
-                    # Busca o último lance (valor atual) se disponível
-                    # Por enquanto, retorna valor inicial
+                    # Busca o melhor lance se disponível, senão valor inicial
+                    aid = leilao["id"]
+                    valor_atual = leilao["valor_inicial"]
+                    if aid in best_bids:
+                        _, valor_atual = best_bids[aid]
+                    
                     ativos.append({
-                        "id": leilao["id"],
+                        "id": aid,
                         "nome": leilao["nome"],
                         "descricao": leilao["descricao"],
-                        "valor_atual": leilao["valor_inicial"],
+                        "valor_atual": valor_atual,
                         "inicio": leilao["start_at"].isoformat(),
                         "fim": leilao["end_at"].isoformat(),
                         "status": "ativo"
@@ -206,10 +231,6 @@ def consultar_leiloes():
 
 def manage_auctions():
     """Thread para gerenciar ciclo de vida dos leilões"""
-    conn = pika.BlockingConnection(conn_params())
-    ch = conn.channel()
-    declare_basics(ch)
-
     if START_DELAY_SEC > 0:
         print(f"[MS_Leilao] aguardando {START_DELAY_SEC}s antes de iniciar (startup delay)")
         time.sleep(START_DELAY_SEC)
@@ -254,31 +275,45 @@ def manage_auctions():
                             "inicio": leilao["start_at"].isoformat(),
                             "fim": leilao["end_at"].isoformat()
                         }
-                        publish(ch, "leilao.iniciado", evt_start)
-                        print(f"[MS_Leilao] iniciado: leilão {aid}")
-                        leiloes_ativos[aid] = leilao["end_at"]
-                        leilao["status"] = "ativo"
+                        # Cria nova conexão para cada publicação (thread-safe)
+                        try:
+                            conn = pika.BlockingConnection(conn_params())
+                            ch = conn.channel()
+                            declare_basics(ch)
+                            publish(ch, "leilao.iniciado", evt_start)
+                            conn.close()
+                            print(f"[MS_Leilao] iniciado: leilão {aid}")
+                            leiloes_ativos[aid] = leilao["end_at"]
+                            leilao["status"] = "ativo"
+                        except Exception as e:
+                            print(f"[MS_Leilao] Erro ao publicar leilao_iniciado para {aid}: {e}")
                 
                 # Finaliza leilões cujo horário de fim chegou
                 ended = [aid for aid, end_at in list(leiloes_ativos.items()) if now >= end_at]
                 for aid in ended:
                     evt_end = {"event": "leilao.finalizado", "id": aid, "fim": leiloes_ativos[aid].isoformat()}
-                    publish(ch, "leilao.finalizado", evt_end)
-                    print(f"[MS_Leilao] finalizado: leilão {aid}")
-                    leiloes_finalizados.add(aid)
-                    del leiloes_ativos[aid]
-                    # Atualiza status no banco
-                    for leilao in leiloes_db:
-                        if leilao["id"] == aid:
-                            leilao["status"] = "finalizado"
-                            break
+                    # Cria nova conexão para cada publicação (thread-safe)
+                    try:
+                        conn = pika.BlockingConnection(conn_params())
+                        ch = conn.channel()
+                        declare_basics(ch)
+                        publish(ch, "leilao.finalizado", evt_end)
+                        conn.close()
+                        print(f"[MS_Leilao] finalizado: leilão {aid}")
+                        leiloes_finalizados.add(aid)
+                        del leiloes_ativos[aid]
+                        # Atualiza status no banco
+                        for leilao in leiloes_db:
+                            if leilao["id"] == aid:
+                                leilao["status"] = "finalizado"
+                                break
+                    except Exception as e:
+                        print(f"[MS_Leilao] Erro ao publicar leilao_finalizado para {aid}: {e}")
             
             time.sleep(0.5)
             
     except KeyboardInterrupt:
         pass
-    finally:
-        conn.close()
 
 
 def main():

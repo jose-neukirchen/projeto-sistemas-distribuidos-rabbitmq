@@ -11,6 +11,7 @@ import os
 import json
 import time
 import pika
+import requests
 import threading
 from typing import Dict, Tuple, Set
 from flask import Flask, request, jsonify
@@ -22,6 +23,7 @@ RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
 RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "/")
 EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "leilao.events")
 LANCE_PORT = int(os.getenv("LANCE_PORT", "5001"))
+MS_LEILAO_URL = os.getenv("MS_LEILAO_URL", "http://ms-leilao:5000")
 
 # Filas dedicadas para consumo
 LEILAO_INICIADO_QUEUE = "leilao_iniciado.ms_lance"
@@ -35,10 +37,6 @@ best_bids: Dict[int, Tuple[str, float]] = {}  # auction_id -> (user_id, value)
 auctions_lock = threading.Lock()
 
 app = Flask(__name__)
-
-# Conexão RabbitMQ global para publicação
-_pub_conn = None
-_pub_ch = None
 
 
 def conn_params():
@@ -54,10 +52,10 @@ def conn_params():
 
 
 def declare_basics(ch):
-    """Declara exchange e filas"""
+    """Declara exchange e filas que este serviço CONSOME"""
     ch.exchange_declare(exchange=EXCHANGE_NAME, exchange_type="direct", durable=True)
     
-    # Filas consumidas
+    # Filas consumidas por este serviço
     for q, rk in [
         (LEILAO_INICIADO_QUEUE, "leilao.iniciado"),
         (LEILAO_FINALIZADO_QUEUE, "leilao.finalizado"),
@@ -65,25 +63,25 @@ def declare_basics(ch):
         ch.queue_declare(queue=q, durable=True)
         ch.queue_bind(queue=q, exchange=EXCHANGE_NAME, routing_key=rk)
     
-    # Filas publicadas
-    for q, rk in [
-        ("lance_validado", "lance.validado"),
-        ("lance_invalidado", "lance.invalidado"),
-        ("leilao_vencedor", "leilao.vencedor"),
-    ]:
-        ch.queue_declare(queue=q, durable=True)
-        ch.queue_bind(queue=q, exchange=EXCHANGE_NAME, routing_key=rk)
+    # Nota: Não declaramos filas para eventos que publicamos
+    # Os consumidores (API Gateway, MS Pagamento) declaram suas próprias filas
 
 
 def publish(routing_key: str, body: dict):
-    """Envia eventos para a exchange"""
-    global _pub_ch
-    _pub_ch.basic_publish(
-        exchange=EXCHANGE_NAME,
-        routing_key=routing_key,
-        body=json.dumps(body).encode("utf-8"),
-        properties=pika.BasicProperties(delivery_mode=2),
-    )
+    """Envia eventos para a exchange (cria nova conexão por segurança)"""
+    try:
+        conn = pika.BlockingConnection(conn_params())
+        ch = conn.channel()
+        declare_basics(ch)
+        ch.basic_publish(
+            exchange=EXCHANGE_NAME,
+            routing_key=routing_key,
+            body=json.dumps(body).encode("utf-8"),
+            properties=pika.BasicProperties(delivery_mode=2),
+        )
+        conn.close()
+    except Exception as e:
+        print(f"[MS_Lance] Erro ao publicar evento {routing_key}: {e}")
 
 
 def on_leilao_iniciado(_ch, method, _props, body):
@@ -119,7 +117,7 @@ def on_leilao_finalizado(_ch, method, _props, body):
             if aid in best_bids and best_bids[aid][0] is not None:
                 winner_id, winner_value = best_bids[aid]
                 event = {
-                    "event": "leilao.vencedor",
+                    "event": "leilao_vencedor",
                     "auction_id": aid,
                     "winner_id": winner_id,
                     "value": winner_value
@@ -176,7 +174,7 @@ def efetuar_lance():
             # Verifica se o leilão está ativo
             if auction_id not in active_auctions:
                 event = {
-                    "event": "lance.invalidado",
+                    "event": "lance_invalidado",
                     "auction_id": auction_id,
                     "user_id": user_id,
                     "value": value,
@@ -191,7 +189,7 @@ def efetuar_lance():
             
             if value <= prev_value:
                 event = {
-                    "event": "lance.invalidado",
+                    "event": "lance_invalidado",
                     "auction_id": auction_id,
                     "user_id": user_id,
                     "value": value,
@@ -203,8 +201,19 @@ def efetuar_lance():
             
             # Lance válido - atualiza e publica
             best_bids[auction_id] = (user_id, value)
+            
+            # Notifica MS Leilao sobre o novo lance
+            try:
+                requests.post(
+                    f"{MS_LEILAO_URL}/leiloes/{auction_id}/lance",
+                    json={"user_id": user_id, "value": value},
+                    timeout=2
+                )
+            except Exception as e:
+                print(f"[MS_Lance] Erro ao notificar MS Leilao: {e}")
+            
             event = {
-                "event": "lance.validado",
+                "event": "lance_validado",
                 "auction_id": auction_id,
                 "user_id": user_id,
                 "value": value,
@@ -226,13 +235,6 @@ def efetuar_lance():
 
 
 def main():
-    global _pub_conn, _pub_ch
-    
-    # Inicializa conexão para publicação
-    _pub_conn = pika.BlockingConnection(conn_params())
-    _pub_ch = _pub_conn.channel()
-    declare_basics(_pub_ch)
-    
     # Inicia thread para consumir eventos
     consumer_thread = threading.Thread(target=consume_events, daemon=True)
     consumer_thread.start()

@@ -14,9 +14,10 @@ import json
 import time
 import threading
 import requests
+import sys
 from queue import Queue
 from typing import Dict, Set
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 import pika
 
@@ -40,6 +41,11 @@ interests_lock = threading.Lock()
 # Filas de notificação por cliente: client_id -> Queue
 client_queues: Dict[str, Queue] = {}
 client_queues_lock = threading.Lock()
+
+# ID da conexão SSE ativa por cliente: client_id -> connection_id
+active_connections: Dict[str, int] = {}
+active_connections_lock = threading.Lock()
+connection_counter = 0
 
 
 def conn_params():
@@ -268,6 +274,19 @@ def registrar_interesse():
         if not client_id or not auction_id:
             return jsonify({"error": "client_id e auction_id são obrigatórios"}), 400
         
+        # Valida se o leilão existe consultando MS Leilao
+        try:
+            resp = requests.get(f"{MS_LEILAO_URL}/leiloes", timeout=5)
+            if resp.status_code == 200:
+                leiloes = resp.json()
+                leilao_existe = any(l.get("id") == auction_id for l in leiloes)
+                if not leilao_existe:
+                    return jsonify({"error": f"Leilão {auction_id} não existe"}), 404
+            else:
+                return jsonify({"error": "Erro ao validar leilão"}), 500
+        except Exception as e:
+            return jsonify({"error": f"Erro ao comunicar com MS Leilao: {str(e)}"}), 500
+        
         with interests_lock:
             if auction_id not in interests:
                 interests[auction_id] = set()
@@ -308,19 +327,36 @@ def cancelar_interesse():
 def sse_stream(client_id):
     """Stream SSE para um cliente específico"""
     
+    # Gera ID único para esta conexão e invalida conexões antigas
+    global connection_counter
+    with active_connections_lock:
+        connection_counter += 1
+        my_connection_id = connection_counter
+        active_connections[client_id] = my_connection_id
+    
+    @stream_with_context
     def event_generator():
         queue = get_client_queue(client_id)
-        print(f"[API Gateway] Cliente {client_id} conectado via SSE")
+        print(f"[API Gateway] Cliente {client_id} conectado via SSE (conn#{my_connection_id})", flush=True)
+        sys.stdout.flush()
         
         # Envia keepalive a cada 30 segundos
         last_keepalive = time.time()
         
         while True:
+            # Verifica se esta conexão ainda é a ativa (não foi substituída)
+            with active_connections_lock:
+                if active_connections.get(client_id) != my_connection_id:
+                    print(f"[API Gateway] Cliente {client_id} desconectado (nova conexão ativa)", flush=True)
+                    break
+            
             try:
-                # Tenta pegar evento da fila (timeout de 1s para permitir keepalive)
+                # Tenta pegar evento da fila (timeout de 0.5s para permitir keepalive e check de disconnect)
                 try:
-                    event = queue.get(timeout=1)
-                    yield f"data: {json.dumps(event)}\n\n"
+                    event = queue.get(timeout=0.5)
+                    data = f"data: {json.dumps(event)}\n\n"
+                    sys.stdout.flush()
+                    yield data
                     last_keepalive = time.time()
                 except:
                     # Timeout - verifica se precisa enviar keepalive
@@ -329,10 +365,10 @@ def sse_stream(client_id):
                         last_keepalive = time.time()
                         
             except GeneratorExit:
-                print(f"[API Gateway] Cliente {client_id} desconectado do SSE")
+                print(f"[API Gateway] Cliente {client_id} desconectado do SSE", flush=True)
                 break
             except Exception as e:
-                print(f"[API Gateway] Erro no SSE para {client_id}: {e}")
+                print(f"[API Gateway] Erro no SSE para {client_id}: {e}", flush=True)
                 break
     
     return Response(

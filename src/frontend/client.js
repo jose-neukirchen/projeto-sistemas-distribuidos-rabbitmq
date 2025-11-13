@@ -22,6 +22,7 @@ const CLIENT_ID = process.env.CLIENT_ID || `client_${Date.now()}`;
 
 let eventSource = null;
 let registeredAuctions = new Set();
+let notificationsBuffer = []; // Buffer para armazenar notificações
 
 // Configura EventSource para receber notificações SSE
 function connectSSE() {
@@ -37,14 +38,17 @@ function connectSSE() {
     eventSource.onmessage = (event) => {
         try {
             const data = JSON.parse(event.data);
+            console.log(chalk.gray(`[DEBUG SSE] Mensagem recebida: ${JSON.stringify(data).substring(0, 100)}`));
             handleNotification(data);
         } catch (e) {
-            // Keepalive ou mensagem inválida - ignora
+            console.log(chalk.red(`[DEBUG SSE] Erro ao processar mensagem: ${e.message}`));
+            console.log(chalk.red(`[DEBUG SSE] Dados brutos: ${event.data}`));
         }
     };
     
     eventSource.onerror = (error) => {
         console.log(chalk.red('[SSE] Erro na conexão. Tentando reconectar...'));
+        console.log(chalk.red(`[DEBUG SSE] Erro detalhes: ${JSON.stringify(error)}`));
     };
 }
 
@@ -53,8 +57,24 @@ function handleNotification(notification) {
     const eventType = notification.event;
     const data = notification.data;
     
-    console.log(chalk.yellow('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
-    console.log(chalk.yellow.bold('  NOTIFICAÇÃO RECEBIDA'));
+    // Adiciona timestamp e armazena no buffer
+    const timestampedNotification = {
+        timestamp: new Date(),
+        event: eventType,
+        data: data
+    };
+    notificationsBuffer.push(timestampedNotification);
+}
+
+// Exibe uma notificação formatada
+function displayNotification(notification) {
+    const eventType = notification.event;
+    const data = notification.data;
+    const timestamp = notification.timestamp.toLocaleString();
+    
+    console.log(chalk.yellow('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+    console.log(chalk.yellow.bold('  🔔 NOTIFICAÇÃO RECEBIDA'));
+    console.log(chalk.gray(`  Horário: ${timestamp}`));
     console.log(chalk.yellow('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'));
     
     switch (eventType) {
@@ -115,7 +135,7 @@ function handleNotification(notification) {
             console.log(JSON.stringify(data, null, 2));
     }
     
-    console.log(chalk.yellow('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'));
+    console.log(chalk.yellow('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'));
 }
 
 // API Functions
@@ -259,8 +279,38 @@ async function cancelarInteresse() {
     }
 }
 
+async function consultarNotificacoes() {
+    console.log(chalk.blue('\n=== NOTIFICAÇÕES RECEBIDAS ===\n'));
+    
+    // Aguarda 100ms para permitir que eventos SSE pendentes sejam processados
+    // O readline-sync é síncrono e bloqueia o event loop, impedindo que
+    // mensagens SSE sejam processadas enquanto aguarda input do usuário.
+    // Este await libera o event loop para processar eventos pendentes.
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    if (notificationsBuffer.length === 0) {
+        console.log(chalk.yellow('Nenhuma notificação recebida ainda.'));
+        return;
+    }
+    
+    console.log(chalk.cyan(`Total de notificações: ${notificationsBuffer.length}\n`));
+    
+    // Exibe todas as notificações em ordem cronológica
+    notificationsBuffer.forEach((notification, index) => {
+        console.log(chalk.gray(`\n[Notificação ${index + 1}/${notificationsBuffer.length}]`));
+        displayNotification(notification);
+    });
+    
+    console.log(chalk.cyan(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`));
+    console.log(chalk.cyan(`  Fim das notificações (${notificationsBuffer.length} total)`));
+    console.log(chalk.cyan(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`));
+}
+
 // Menu principal
 function showMenu() {
+    const notifCount = notificationsBuffer.length;
+    const notifIndicator = notifCount > 0 ? chalk.yellow.bold(` [${notifCount} nova${notifCount > 1 ? 's' : ''}]`) : '';
+    
     console.log(chalk.cyan('\n╔════════════════════════════════════════╗'));
     console.log(chalk.cyan('║      SISTEMA DE LEILÃO - CLIENTE       ║'));
     console.log(chalk.cyan('╚════════════════════════════════════════╝'));
@@ -270,6 +320,7 @@ function showMenu() {
     console.log('3. Efetuar lance');
     console.log('4. Registrar interesse em notificações');
     console.log('5. Cancelar interesse em notificações');
+    console.log(`6. Consultar notificações recebidas${notifIndicator}`);
     console.log('0. Sair\n');
 }
 
@@ -303,6 +354,9 @@ async function main() {
                 break;
             case '5':
                 await cancelarInteresse();
+                break;
+            case '6':
+                await consultarNotificacoes();
                 break;
             case '0':
                 running = false;

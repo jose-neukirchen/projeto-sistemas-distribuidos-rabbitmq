@@ -37,10 +37,6 @@ transactions_lock = threading.Lock()
 
 app = Flask(__name__)
 
-# Conexão RabbitMQ global para publicação
-_pub_conn = None
-_pub_ch = None
-
 
 def conn_params():
     """Cria parâmetros de conexão RabbitMQ"""
@@ -55,31 +51,32 @@ def conn_params():
 
 
 def declare_basics(ch):
-    """Declara exchange e filas"""
+    """Declara exchange e filas que este serviço CONSOME"""
     ch.exchange_declare(exchange=EXCHANGE_NAME, exchange_type="direct", durable=True)
     
-    # Filas consumidas
+    # Fila consumida por este serviço
     ch.queue_declare(queue=LEILAO_VENCEDOR_QUEUE, durable=True)
     ch.queue_bind(queue=LEILAO_VENCEDOR_QUEUE, exchange=EXCHANGE_NAME, routing_key="leilao.vencedor")
     
-    # Filas publicadas
-    for q, rk in [
-        ("link_pagamento", "link.pagamento"),
-        ("status_pagamento", "status.pagamento"),
-    ]:
-        ch.queue_declare(queue=q, durable=True)
-        ch.queue_bind(queue=q, exchange=EXCHANGE_NAME, routing_key=rk)
+    # Nota: Não declaramos filas para eventos que publicamos
+    # O consumidor (API Gateway) declara suas próprias filas
 
 
 def publish(routing_key: str, body: dict):
-    """Envia eventos para a exchange"""
-    global _pub_ch
-    _pub_ch.basic_publish(
-        exchange=EXCHANGE_NAME,
-        routing_key=routing_key,
-        body=json.dumps(body).encode("utf-8"),
-        properties=pika.BasicProperties(delivery_mode=2),
-    )
+    """Envia eventos para a exchange (cria nova conexão por segurança)"""
+    try:
+        conn = pika.BlockingConnection(conn_params())
+        ch = conn.channel()
+        declare_basics(ch)
+        ch.basic_publish(
+            exchange=EXCHANGE_NAME,
+            routing_key=routing_key,
+            body=json.dumps(body).encode("utf-8"),
+            properties=pika.BasicProperties(delivery_mode=2),
+        )
+        conn.close()
+    except Exception as e:
+        print(f"[MS_Pagamento] Erro ao publicar evento {routing_key}: {e}")
 
 
 def on_leilao_vencedor(_ch, method, _props, body):
@@ -122,7 +119,7 @@ def on_leilao_vencedor(_ch, method, _props, body):
                 
                 # Publica link de pagamento
                 event = {
-                    "event": "link.pagamento",
+                    "event": "link_pagamento",
                     "auction_id": auction_id,
                     "user_id": winner_id,
                     "transaction_id": transaction_id,
@@ -188,7 +185,7 @@ def webhook():
         
         # Publica evento de status de pagamento
         event = {
-            "event": "status.pagamento",
+            "event": "status_pagamento",
             "transaction_id": transaction_id,
             "auction_id": auction_id,
             "user_id": user_id,
@@ -208,13 +205,6 @@ def webhook():
 
 
 def main():
-    global _pub_conn, _pub_ch
-    
-    # Inicializa conexão para publicação
-    _pub_conn = pika.BlockingConnection(conn_params())
-    _pub_ch = _pub_conn.channel()
-    declare_basics(_pub_ch)
-    
     # Inicia thread para consumir eventos
     consumer_thread = threading.Thread(target=consume_events, daemon=True)
     consumer_thread.start()

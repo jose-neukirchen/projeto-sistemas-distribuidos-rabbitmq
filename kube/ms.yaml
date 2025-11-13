@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ms-leilao
+  namespace: leilao
 spec:
   replicas: 1
   selector:
@@ -49,6 +50,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ms-leilao
+  namespace: leilao
 spec:
   selector:
     app: ms-leilao
@@ -60,6 +62,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ms-lance
+  namespace: leilao
 spec:
   replicas: 1
   selector:
@@ -101,6 +104,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ms-lance
+  namespace: leilao
 spec:
   selector:
     app: ms-lance
@@ -112,6 +116,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ms-pagamento
+  namespace: leilao
 spec:
   replicas: 1
   selector:
@@ -155,6 +160,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ms-pagamento
+  namespace: leilao
 spec:
   selector:
     app: ms-pagamento
@@ -166,6 +172,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: api-gateway
+  namespace: leilao
 spec:
   replicas: 1
   selector:
@@ -211,6 +218,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: api-gateway
+  namespace: leilao
 spec:
   type: NodePort
   selector:
@@ -224,6 +232,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: payment-external
+  namespace: leilao
 spec:
   replicas: 1
   selector:
@@ -253,6 +262,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: payment-external
+  namespace: leilao
 spec:
   selector:
     app: payment-external
