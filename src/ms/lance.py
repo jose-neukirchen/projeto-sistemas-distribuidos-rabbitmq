@@ -9,7 +9,6 @@
 
 import os
 import json
-import time
 import pika
 import requests
 import threading
@@ -23,7 +22,6 @@ RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
 RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "/")
 EXCHANGE_NAME = os.getenv("EXCHANGE_NAME", "leilao.events")
 LANCE_PORT = int(os.getenv("LANCE_PORT", "5001"))
-MS_LEILAO_URL = os.getenv("MS_LEILAO_URL", "http://ms-leilao:5000")
 
 # Filas dedicadas para consumo
 LEILAO_INICIADO_QUEUE = "leilao_iniciado.ms_lance"
@@ -201,16 +199,6 @@ def efetuar_lance():
             
             # Lance válido - atualiza e publica
             best_bids[auction_id] = (user_id, value)
-            
-            # Notifica MS Leilao sobre o novo lance
-            try:
-                requests.post(
-                    f"{MS_LEILAO_URL}/leiloes/{auction_id}/lance",
-                    json={"user_id": user_id, "value": value},
-                    timeout=2
-                )
-            except Exception as e:
-                print(f"[MS_Lance] Erro ao notificar MS Leilao: {e}")
             
             event = {
                 "event": "lance_validado",

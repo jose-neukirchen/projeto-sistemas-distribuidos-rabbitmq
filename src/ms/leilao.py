@@ -11,57 +11,12 @@
 #    quando o tempo definido para esse leilão expirar. Quando um leilão
 #    termina, ele publica o evento na fila: leilao_finalizado.
 
-lista_leiloes = [
-    {
-        "id": 1,
-        "descricao": "Leilão de Produto A",
-        "data_inicio": "2025-10-01T10:00:00",
-        "data_fim": "2025-10-01T12:00:00",
-        "status": "ativo"
-    },
-    {
-        "id": 2,
-        "descricao": "Leilão de Produto B",
-        "data_inicio": "2025-10-02T14:00:00",
-        "data_fim": "2025-10-02T16:00:00",
-        "status": "ativo"
-    },
-    {
-        "id": 3,
-        "descricao": "Leilão de Produto C",
-        "data_inicio": "2025-10-03T14:00:00",
-        "data_fim": "2025-10-03T16:00:00",
-        "status": "ativo"
-    },
-    {
-        "id": 4,
-        "descricao": "Leilão de Produto D",
-        "data_inicio": "2025-10-04T14:00:00",
-        "data_fim": "2025-10-04T16:00:00",
-        "status": "ativo"
-    },
-    {
-        "id": 5,
-        "descricao": "Leilão de Produto E",
-        "data_inicio": "2025-10-05T14:00:00",
-        "data_fim": "2025-10-05T16:00:00",
-        "status": "ativo"
-    },
-    {
-        "id": 6,
-        "descricao": "Leilão de Produto F",
-        "data_inicio": "2025-10-06T14:00:00",
-        "data_fim": "2025-10-06T16:00:00",
-        "status": "ativo"
-    }
-]
-
 import os
 import time
 import json
 import pika
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from flask import Flask, request, jsonify
 
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
@@ -235,26 +190,6 @@ def manage_auctions():
         print(f"[MS_Leilao] aguardando {START_DELAY_SEC}s antes de iniciar (startup delay)")
         time.sleep(START_DELAY_SEC)
 
-    # Carrega leilões hardcoded iniciais
-    now = datetime.now(timezone.utc)
-    with leiloes_lock:
-        global next_auction_id
-        for idx, leilao in enumerate(lista_leiloes):
-            aid = next_auction_id
-            next_auction_id += 1
-            desc = leilao["descricao"]
-            start_at = now + timedelta(seconds=idx * START_STAGGER_SEC)
-            end_at = start_at + timedelta(seconds=DURATION_SEC)
-            leiloes_db.append({
-                "id": aid,
-                "nome": f"Produto {aid}",
-                "descricao": desc,
-                "valor_inicial": 100.0,
-                "start_at": start_at,
-                "end_at": end_at,
-                "status": "agendado"
-            })
-
     print(f"[MS_Leilao] {len(leiloes_db)} leilões agendados")
 
     try:
@@ -275,7 +210,6 @@ def manage_auctions():
                             "inicio": leilao["start_at"].isoformat(),
                             "fim": leilao["end_at"].isoformat()
                         }
-                        # Cria nova conexão para cada publicação (thread-safe)
                         try:
                             conn = pika.BlockingConnection(conn_params())
                             ch = conn.channel()

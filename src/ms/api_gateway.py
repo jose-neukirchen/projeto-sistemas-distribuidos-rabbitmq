@@ -99,8 +99,21 @@ def notify_clients(auction_id: int, event_data: dict):
 def on_lance_validado(_ch, method, _props, body):
     """Callback para eventos de lance validado"""
     try:
+
         msg = json.loads(body.decode())
         auction_id = int(msg.get("auction_id"))
+        user_id = msg.get("user_id")
+        value = msg.get("value")
+        
+        # Notifica MS Leilao sobre o novo lance
+        try:
+            requests.post(
+                f"{MS_LEILAO_URL}/leiloes/{auction_id}/lance",
+                json={"user_id": user_id, "value": value},
+                timeout=2
+            )
+        except Exception as e:
+            print(f"[MS_Lance] Erro ao notificar MS Leilao: {e}")
         
         event = {
             "event": "lance_validado",
